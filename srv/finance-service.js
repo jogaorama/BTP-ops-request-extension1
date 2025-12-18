@@ -4,35 +4,39 @@ module.exports = cds.service.impl(async function () {
 
     const { FinanceRequests, ApprovalHistory } = this.entities;
 
-    // Default handling on create
+    // Helper: get current user safely
+    function currentUser(req) {
+        return req.user && req.user.id ? req.user.id : 'anonymous';
+    }
+
+    // ================================
+    // CREATE: requester creates a request
+    // ================================
     this.before('CREATE', FinanceRequests, (req) => {
-        if (!req.data.status) {
-            req.data.status = 'SUBMITTED';
-        }
+        const user = currentUser(req);
 
-        // For now, set a dummy approver (later comes from rules / S4)
-        if (!req.data.currentApprover) {
-            req.data.currentApprover = 'manager1';
-        }
-
+        req.data.requester = user;
+        req.data.status = 'SUBMITTED';
         req.data.createdAt = new Date();
         req.data.updatedAt = new Date();
+
+        // NOTE: currentApprover assignment will later come from rules / workflow
+        if (!req.data.currentApprover) {
+            req.data.currentApprover = 'finance.approver'; // placeholder role
+        }
     });
 
-    // Approve action
-    this.on('approve', FinanceRequests, async (req) => {
-        const { ID } = req.params[0];
-        const user = req.user.id || 'manager1';
+    // ================================
+    // APPROVE
+    // ================================
+    this.on('approveRequest', async (req) => {
+        const user = currentUser(req);
+        const { ID } = req.data;
 
         const tx = cds.transaction(req);
 
-        const request = await tx.read(FinanceRequests).where({ ID });
-
-        if (!request.length) {
-            req.reject(404, 'Finance request not found');
-        }
-
-        const fr = request[0];
+        const [fr] = await tx.read(FinanceRequests).where({ ID });
+        if (!fr) req.reject(404, 'Finance request not found');
 
         if (fr.status !== 'SUBMITTED') {
             req.reject(400, 'Only SUBMITTED requests can be approved');
@@ -56,24 +60,23 @@ module.exports = cds.service.impl(async function () {
             decidedAt: new Date()
         });
 
-        return { success: true };
+        return {
+            outcome: 'APPROVED',
+            message: `Finance request ${ID} approved`
+        };
     });
 
-    // Reject action
-    this.on('reject', FinanceRequests, async (req) => {
-        const { ID } = req.params[0];
-        const { reason } = req.data;
-        const user = req.user.id || 'manager1';
+    // ================================
+    // REJECT
+    // ================================
+    this.on('rejectRequest', async (req) => {
+        const user = currentUser(req);
+        const { ID, reason } = req.data;
 
         const tx = cds.transaction(req);
 
-        const request = await tx.read(FinanceRequests).where({ ID });
-
-        if (!request.length) {
-            req.reject(404, 'Finance request not found');
-        }
-
-        const fr = request[0];
+        const [fr] = await tx.read(FinanceRequests).where({ ID });
+        if (!fr) req.reject(404, 'Finance request not found');
 
         if (fr.status !== 'SUBMITTED') {
             req.reject(400, 'Only SUBMITTED requests can be rejected');
@@ -98,7 +101,10 @@ module.exports = cds.service.impl(async function () {
             decidedAt: new Date()
         });
 
-        return { success: true };
+        return {
+            outcome: 'REJECTED',
+            message: `Finance request ${ID} rejected: ${reason}`
+        };
     });
 
 });
